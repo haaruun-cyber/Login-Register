@@ -1,7 +1,10 @@
 const { UserModel, ValidateUser, ValidateLogin } = require('../Model/UserModel');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
-const SECRET_KEY = process.env.SECRET_KEY
+const SECRET_KEY = process.env.SECRET_KEY;
+
+const { OAuth2Client } = require("google-auth-library");
+const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 const GetAllUser = async(req,res)=>{
     try {
@@ -99,4 +102,60 @@ const DeleteUser = async(req,res)=>{
     }
 }
 
-module.exports = { GetAllUser, GetUserById, CreateUser, Login, UpdateUser, DeleteUser }
+const GoogleLogin = async (req, res) => {
+    try {
+        const { token } = req.body;
+
+        if (!token) {
+            return res.send({ status: false, message: "Token is required" });
+        }
+
+        // Verify token with Google
+        const ticket = await client.verifyIdToken({
+            idToken: token,
+            audience: process.env.GOOGLE_CLIENT_ID,
+        });
+
+        const payload = ticket.getPayload();
+        const { email, given_name, family_name } = payload;
+
+        // Check if user already exists
+        let user = await UserModel.findOne({ email });
+
+        if (!user) {
+            // Create user without password (Google user)
+            user = await new UserModel({
+                firstname: given_name,
+                lastname: family_name,
+                email: email,
+                password: "google-oauth-user", // dummy password
+            }).save();
+        }
+
+        // Generate JWT token (same format as normal login)
+        const appToken = jwt.sign(
+            {
+                id: user._id,
+                firstname: user.firstname,
+                lastname: user.lastname,
+                email: user.email,
+            },
+            SECRET_KEY
+        );
+
+        res.send({
+            status: true,
+            message: "Google login successful",
+            token: appToken,
+        });
+
+    } catch (error) {
+        console.log(error);
+        res.send({
+            status: false,
+            message: "Google login failed",
+        });
+    }
+};
+
+module.exports = { GetAllUser, GetUserById, CreateUser, Login, GoogleLogin, UpdateUser, DeleteUser }
