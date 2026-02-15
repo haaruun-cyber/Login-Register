@@ -1,7 +1,10 @@
-const { UserModel, ValidateUser, ValidateLogin } = require('../Model/UserModel');
+const { UserModel, ValidateUser, ValidateLogin, ValidateForgetPassword } = require('../Model/UserModel');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const SECRET_KEY = process.env.SECRET_KEY;
+const crypto = require('crypto');
+require('dotenv').config();
+const sendEmail = require('../utils/sendEmail');
 
 const { OAuth2Client } = require("google-auth-library");
 const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
@@ -105,10 +108,7 @@ const DeleteUser = async(req,res)=>{
 const GoogleLogin = async (req, res) => {
     try {
         const { token } = req.body;
-
-        if (!token) {
-            return res.send({ status: false, message: "Token is required" });
-        }
+        if (!token) { return res.send({ status: false, message: "Token is required" });}
 
         // Verify token with Google
         const ticket = await client.verifyIdToken({
@@ -143,19 +143,145 @@ const GoogleLogin = async (req, res) => {
             SECRET_KEY
         );
 
-        res.send({
-            status: true,
-            message: "Google login successful",
-            token: appToken,
-        });
-
+        res.send({ status: true, message: "Google login successful", token: appToken,});
     } catch (error) {
         console.log(error);
-        res.send({
-            status: false,
-            message: "Google login failed",
-        });
+        res.send({ status: false, message: "Google login failed",});
     }
 };
 
-module.exports = { GetAllUser, GetUserById, CreateUser, Login, GoogleLogin, UpdateUser, DeleteUser }
+const ForgotPassword = async (req, res) => {
+    try {
+        //validate user input
+        const { error } = ValidateForgetPassword(req.body);
+        if(error) return res.send({status:false, message:error.message});
+
+        const { email } = req.body;
+
+        const user = await UserModel.findOne({ email });
+
+        // Do NOT reveal if user exists (security best practice)
+        if (!user) {
+            return res.send({
+                status: true,
+                message: "If this email exists, a reset link was sent"
+            });
+        }
+
+        // 🚨 Block Google users
+        if (user.password === "google-oauth-user") {
+            return res.send({
+                status: false,
+                message: "This account was created using Google. Please login with Google."
+            });
+        }
+
+        // Generate reset token
+        const resetToken = crypto.randomBytes(32).toString("hex");
+
+        const hashedToken = crypto
+            .createHash("sha256")
+            .update(resetToken)
+            .digest("hex");
+
+        user.resetPasswordToken = hashedToken;
+        user.resetPasswordExpires = Date.now() + 3600000; // 1 hour
+
+        await user.save();
+
+        const resetURL = `${process.env.CLIENT_URL}/reset-password/${resetToken}`;
+
+        // TODO: send email here
+        // console.log("Reset Link:", resetURL);
+        await sendEmail(
+            user.email,
+            'Password Reset',
+            `
+                <h2>Password Reset</h2>
+                <p>Click the link below to reset your password:</p>
+                <a href="${resetURL}">${resetURL}</a>
+            `
+        );
+
+        res.send({
+            status: true,
+            message: "If this email exists, a reset link was sent"
+        });
+
+    } catch (error) {
+        res.send({ status: false, message: error.message });
+    }
+};
+
+// const ResetPassword = async (req, res) => {
+//     try {
+
+//         const hashedToken = crypto
+//             .createHash("sha256")
+//             .update(req.params.token)
+//             .digest("hex");
+
+//         const user = await UserModel.findOne({
+//             resetPasswordToken: hashedToken,
+//             resetPasswordExpires: { $gt: Date.now() }
+//         });
+
+//         if (!user) {
+//             return res.send({
+//                 status: false,
+//                 message: "Invalid or expired token"
+//             });
+//         }
+
+//         const salt = await bcrypt.genSalt(10);
+//         const hashedPassword = await bcrypt.hash(req.body.password, salt);
+
+//         user.password = hashedPassword;
+//         user.resetPasswordToken = undefined;
+//         user.resetPasswordExpires = undefined;
+
+//         await user.save();
+
+//         res.send({
+//             status: true,
+//             message: "Password reset successful"
+//         });
+
+//     } catch (error) {
+//         res.send({ status: false, message: error.message });
+//     }
+// };
+
+const ResetPassword = async (req, res) => {
+  try {
+    const { token } = req.params;
+    const { password } = req.body;
+
+    const hashedToken = crypto
+      .createHash("sha256")
+      .update(token)
+      .digest("hex");
+
+    const user = await UserModel.findOne({
+      resetPasswordToken: hashedToken,
+      resetPasswordExpires: { $gt: Date.now() },
+    });
+
+    if (!user) {
+      return res.send({ status: false, message: "Invalid or expired token" });
+    }
+
+    user.password = await bcrypt.hash(password, 10);
+    user.resetPasswordToken = undefined;
+    user.resetPasswordExpires = undefined;
+
+    await user.save();
+
+    res.send({ status: true, message: "Password reset successful" });
+  } catch (error) {
+    console.log(error);
+    res.send({ status: false, message: error.message });
+  }
+};
+
+module.exports = { GetAllUser, GetUserById, CreateUser, Login, GoogleLogin, ForgotPassword, ResetPassword, UpdateUser, DeleteUser }

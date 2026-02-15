@@ -25,6 +25,12 @@ const UserSchema = mongoose.Schema({
         type:String,
         enum:['user','admin'],
         default:'user'
+    },
+    resetPasswordToken:{
+        type:String
+    },
+    resetPasswordExpires:{
+        type:Date
     }
 },{ timestamps:true })
 
@@ -48,4 +54,12 @@ const ValidateLogin = (body)=>{
     })
     return schema.validate(body)
 }
-module.exports = { UserModel, ValidateUser, ValidateLogin }
+
+const ValidateForgetPassword = (body)=>{
+    const schema = joi.object({
+        email:joi.string().email({ tlds: { allow: false } }).required(),
+    })
+    return schema.validate(body);
+}
+
+module.exports = { UserModel, ValidateUser, ValidateLogin, ValidateForgetPassword }
